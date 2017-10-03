@@ -5,6 +5,7 @@
 #include <Scylla/Settings.h>
 #include <Scylla/Util.h>
 #include <Scylla/Version.h>
+#include <InjectorCLI/ApplyHooking.h>
 #include <x64dbg/_plugins.h>
 
 #include "..\PluginGeneric\Injector.h"
@@ -63,6 +64,9 @@ DWORD ProcessId = 0;
 bool bHooked = false;
 ICONDATA mainIconData = { 0 };
 
+bool ntdllLoadCbProcessed = false;
+bool x64dbgNtQIPHookEnabled = false;
+
 static void LogCallback(const char *msg)
 {
     _plugin_logprintf("[%s] %s\n", SCYLLA_HIDE_NAME_A, msg);
@@ -113,6 +117,16 @@ static void cbMenuEntry(CBTYPE cbType, void* callbackInfo)
     default: {
         auto profile_name = g_settings.profile_names()[info->hEntry - MENU_MAX].c_str();
         g_settings.SetProfile(profile_name);
+
+        if (g_settings.opts().hookNtQueryInformationProcess && (!ntdllLoadCbProcessed || !g_hdd.isNtdllHooked))
+        {
+            x64dbgNtQIPHookEnabled = true; // store the true setting here
+            g_settings.opts().hookNtQueryInformationProcess = false; // disable NtQIP hook until it is safe to apply it
+        }
+        else if (!g_settings.opts().hookNtQueryInformationProcess)
+        {
+            x64dbgNtQIPHookEnabled = false;
+        }
 
         if (ProcessId)
         {
@@ -174,8 +188,21 @@ static void cbDebugloop(CBTYPE cbType, void* callbackInfo)
     {
         if (bHooked)
         {
+            if (ntdllLoadCbProcessed &&
+                g_hdd.isNtdllHooked &&
+                x64dbgNtQIPHookEnabled &&
+                !g_settings.opts().hookNtQueryInformationProcess)
+            {
+                // Apply the NtQIP hook now that it's safe to do so
+                g_settings.opts().hookNtQueryInformationProcess = true;
+                g_hdd.EnableNtQueryInformationProcessHook = true;
+            }
+
             startInjection(ProcessId, &g_hdd, g_scyllaHideDllPath.c_str(), false);
         }
+
+        ntdllLoadCbProcessed = true; // ntdll.dll is always the first DLL to load, so even if we missed the actual callback, this is OK
+
         break;
     }
     case EXCEPTION_DEBUG_EVENT:
@@ -229,6 +256,11 @@ extern "C" DLL_EXPORT void plugsetup(PLUG_SETUPSTRUCT* setupStruct)
     hMenu = setupStruct->hMenu;
 
     g_settings.Load(g_scyllaHideIniPath.c_str());
+    if (g_settings.opts().hookNtQueryInformationProcess)
+    {
+        x64dbgNtQIPHookEnabled = true; // store the true setting here
+        g_settings.opts().hookNtQueryInformationProcess = false; // disable NtQIP hook until it is safe to apply it
+    }
 
     _plugin_logprintf("%s Plugin v%s Copyright (C) 2014 Aguila / cypher\n", SCYLLA_HIDE_NAME_A, SCYLLA_HIDE_VERSION_STRING_A);
 

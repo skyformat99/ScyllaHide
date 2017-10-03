@@ -236,6 +236,22 @@ void ApplyNtdllHook(HOOK_DLL_DATA * hdd, HANDLE hProcess, BYTE * dllMemory, DWOR
 #endif
 }
 
+void ApplyNtQueryInformationProcessLateHook(HOOK_DLL_DATA * hdd, HANDLE hProcess, BYTE * dllMemory, DWORD_PTR imageBase)
+{
+    hNtdll = GetModuleHandleW(L"ntdll.dll");
+
+    void * HookedNtQueryInformationProcess = (void *)(GetDllFunctionAddressRVA(dllMemory, "HookedNtQueryInformationProcess") + imageBase);
+    _NtQueryInformationProcess = (t_NtQueryInformationProcess)GetProcAddress(hNtdll, "NtQueryInformationProcess");
+
+    g_log.LogDebug(L"ApplyNtQueryInformationProcessLateHook -> _NtQueryInformationProcess %p", _NtQueryInformationProcess);
+
+    if (hdd->EnableNtQueryInformationProcessHook == TRUE)
+    {
+        g_log.LogDebug(L"ApplyNtdllHook -> Hooking NtQueryInformationProcess");
+        HOOK_NATIVE(NtQueryInformationProcess);
+    }
+}
+
 void ApplyKernel32Hook(HOOK_DLL_DATA * hdd, HANDLE hProcess, BYTE * dllMemory, DWORD_PTR imageBase)
 {
     hKernel = GetModuleHandleW(L"kernel32.dll");
@@ -633,6 +649,12 @@ bool ApplyHook(HOOK_DLL_DATA * hdd, HANDLE hProcess, BYTE * dllMemory, DWORD_PTR
     {
         retVal = true;
         ApplyNtdllHook(hdd, hProcess, dllMemory, imageBase);
+    }
+    else if (hdd->EnableNtQueryInformationProcessHook && hdd->dNtQueryInformationProcess == nullptr)
+    {
+        // Workaround for x64dbg: allow the NtQIP hook to co-exist with the "query process cookie" setting
+        retVal = true;
+        ApplyNtQueryInformationProcessLateHook(hdd, hProcess, dllMemory, imageBase);
     }
     if (hdd->isKernel32Hooked == FALSE)
     {
